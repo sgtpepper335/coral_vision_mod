@@ -34,8 +34,6 @@ import time
 from pycoral.adapters import detect
 from pycoral.utils import edgetpu
 
-import nms
-
 from . import svg
 from . import utils
 from .apps import run_app
