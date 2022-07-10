@@ -300,6 +300,7 @@ class StreamingServer:
     def _run(self, mdns_name, tcp_port, web_port, annexb_port):
         try:
             with contextlib.ExitStack() as stack:
+                logger.info('MOD OK !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!')
                 logger.info('Listening on ports tcp: %d, web: %d, annexb: %d',
                             tcp_port, web_port, annexb_port)
                 tcp_socket = stack.enter_context(Socket(tcp_port))
