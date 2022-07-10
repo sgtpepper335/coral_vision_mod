@@ -34,6 +34,8 @@ import time
 from pycoral.adapters import detect
 from pycoral.utils import edgetpu
 
+import nms
+
 from . import svg
 from . import utils
 from .apps import run_app
@@ -150,6 +152,8 @@ def render_gen(args):
             inference_time = time.monotonic() - start
 
             objs = detect.get_objects(interpreter, args.threshold)[:args.top_k]
+            objs = nms.non_max_suppression(objs)
+            
             if labels and filtered_labels:
                 objs = [obj for obj in objs if labels[obj.id] in filtered_labels]
 
