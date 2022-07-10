@@ -1,0 +1,13 @@
+#!/usr/bin/make -f
+
+PLUGINSDIR := $(shell pkg-config --variable=pluginsdir gstreamer-1.0)
+DESTDIR := debian/python3-edgetpuvision/$(PLUGINSDIR)/python
+
+export PYBUILD_NAME=edgetpuvision
+%:
+	dh $@ --with python3 --buildsystem=pybuild
+
+override_dh_install:
+	dh_install
+	install -d $(DESTDIR)
+	install -g 0 -o 0 plugins/python/*.py $(DESTDIR)
