@@ -47,7 +47,7 @@ from gi.repository import GstPbutils  # Must be called after Gst.init().
 
 from PIL import Image
 
-from .pipelines import *
+from pipelines import *
 
 COMMAND_SAVE_FRAME = ' '
 COMMAND_PRINT_INFO = 'p'
