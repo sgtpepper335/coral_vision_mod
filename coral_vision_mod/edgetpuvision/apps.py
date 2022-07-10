@@ -1,17 +1,3 @@
-# Copyright 2019 Google LLC
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 import argparse
 import logging
 import signal
@@ -57,6 +43,8 @@ def run_app(add_render_gen_args, render_gen):
     parser.add_argument('--source',
                         help='/dev/videoN:FMT:WxH:N/D or .mp4 file or image file',
                         default='/dev/video0:YUY2:1280x720:30/1')
+    parser.add_argument('--downscale', type=float, default=2.0,
+                        help='Downscale factor for .mp4 file rendering')
     parser.add_argument('--loop',  default=False, action='store_true',
                         help='Loop input video file')
     parser.add_argument('--displaymode', type=Display, choices=Display, default=Display.FULLSCREEN,
@@ -66,6 +54,7 @@ def run_app(add_render_gen_args, render_gen):
 
     if not run_gen(render_gen(args),
                    source=args.source,
+                   downscale=args.downscale,
                    loop=args.loop,
                    display=args.displaymode):
         print('Invalid source argument:', args.source)

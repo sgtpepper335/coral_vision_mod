@@ -1,17 +1,3 @@
-# Copyright 2019 Google LLC
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 import collections
 import contextlib
 import enum
@@ -34,10 +20,8 @@ gi.require_version('GLib', '2.0')
 gi.require_version('GObject', '2.0')
 gi.require_version('Gst', '1.0')
 gi.require_version('GstBase', '1.0')
-gi.require_version('GstGL', '1.0')
 gi.require_version('GstPbutils', '1.0')
-gi.require_version('GstVideo', '1.0')
-from gi.repository import GLib, GObject, Gst, GstBase, GstGL, GstVideo, Gtk
+from gi.repository import GLib, GObject, Gst, GstBase, Gtk
 
 GObject.threads_init()
 Gst.init([])
@@ -47,6 +31,7 @@ from gi.repository import GstPbutils  # Must be called after Gst.init().
 
 from PIL import Image
 
+from .gst_native import set_display_contexts
 from .pipelines import *
 
 COMMAND_SAVE_FRAME = ' '
@@ -160,15 +145,12 @@ def get_video_info(filename):
     assert len(streams) == 1
     return streams[0]
 
-def get_seek_element(pipeline):
-    element = pipeline.get_by_name('glsink')
-    if not element:
-        element = pipeline
+def is_seekable(element):
     query = Gst.Query.new_seeking(Gst.Format.TIME)
     if element.query(query):
         _,  seekable, _, _ = query.parse_seeking()
-        return element
-    return None
+        return seekable
+    return False
 
 @contextlib.contextmanager
 def pull_sample(sink):
@@ -189,10 +171,9 @@ def new_sample_callback(process):
 
 def on_bus_message(bus, message, pipeline, loop):
     if message.type == Gst.MessageType.EOS:
-        seek_element = get_seek_element(pipeline)
-        if loop and seek_element:
+        if loop and is_seekable(pipeline):
             flags = Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT
-            if not seek_element.seek_simple(Gst.Format.TIME, flags, 0):
+            if not pipeline.seek_simple(Gst.Format.TIME, flags, 0):
                 Gtk.main_quit()
         else:
             Gtk.main_quit()
@@ -203,11 +184,6 @@ def on_bus_message(bus, message, pipeline, loop):
         err, debug = message.parse_error()
         sys.stderr.write('Error: %s: %s\n' % (err, debug))
         Gtk.main_quit()
-
-def on_sink_eos(sink, pipeline):
-    overlay = pipeline.get_by_name('overlay')
-    if overlay:
-        overlay.set_eos()
 
 def on_new_sample(sink, pipeline, render_overlay, layout, images, get_command):
     with pull_sample(sink) as (sample, data):
@@ -228,27 +204,27 @@ def on_new_sample(sink, pipeline, render_overlay, layout, images, get_command):
 
         svg = render_overlay(np.frombuffer(data, dtype=np.uint8),
                              command=custom_command)
-        glsink = pipeline.get_by_name('glsink')
-        if glsink:
-            glsink.set_property('svg', svg)
+        overlay = pipeline.get_by_name('overlay')
+        if overlay:
+            overlay.set_svg(svg, layout.render_size)
 
         if save_frame:
             images.put((data, layout.inference_size, svg))
 
     return Gst.FlowReturn.OK
 
-def run_gen(render_overlay_gen, *, source, loop, display):
+def run_gen(render_overlay_gen, *, source, downscale, loop, display):
     inference_size = render_overlay_gen.send(None)  # Initialize.
-    next(render_overlay_gen)
     return run(inference_size,
         lambda tensor, layout, command:
             render_overlay_gen.send((tensor, layout, command)),
         source=source,
+        downscale=downscale,
         loop=loop,
         display=display)
 
-def run(inference_size, render_overlay, *, source, loop, display):
-    result = get_pipeline(source, inference_size, display)
+def run(inference_size, render_overlay, *, source, downscale, loop, display):
+    result = get_pipeline(source, inference_size, downscale, display)
     if result:
         layout, pipeline = result
         run_pipeline(pipeline, layout, loop, render_overlay, display)
@@ -256,7 +232,7 @@ def run(inference_size, render_overlay, *, source, loop, display):
 
     return False
 
-def get_pipeline(source, inference_size, display):
+def get_pipeline(source, inference_size, downscale, display):
     fmt = parse_format(source)
     if fmt:
         layout = make_layout(inference_size, fmt.size)
@@ -265,7 +241,7 @@ def get_pipeline(source, inference_size, display):
     filename = os.path.expanduser(source)
     if os.path.isfile(filename):
         info = get_video_info(filename)
-        render_size = Size(info.get_width(), info.get_height())
+        render_size = Size(info.get_width(), info.get_height()) / downscale
         layout = make_layout(inference_size, render_size)
         return layout, file_pipline(info.is_image(), filename, layout, display)
 
@@ -299,15 +275,15 @@ def run_pipeline(pipeline, layout, loop, render_overlay, display, handle_sigint=
     print(pipeline)
     pipeline = Gst.parse_launch(pipeline)
 
-    # Set up a pipeline bus watch to catch errors.
-    bus = pipeline.get_bus()
-    bus.add_signal_watch()
-    bus.connect('message', on_bus_message, pipeline, loop)
-
     if display is not Display.NONE:
-        # Needed to commit the wayland sub-surface.
-        def on_gl_draw(sink, widget):
-            widget.queue_draw()
+        # Workaround for https://gitlab.gnome.org/GNOME/gtk/issues/844 in gtk3 < 3.24.
+        widget_draws = 123
+        def on_widget_draw(widget, cairo):
+            nonlocal widget_draws
+            if widget_draws:
+                 widget.queue_draw()
+                 widget_draws -= 1
+            return False
 
         # Needed to account for window chrome etc.
         def on_widget_configure(widget, event, glsink):
@@ -327,36 +303,11 @@ def run_pipeline(pipeline, layout, loop, render_overlay, display, handle_sigint=
         drawing_area.realize()
 
         glsink = pipeline.get_by_name('glsink')
-        glsink.connect('drawn', on_gl_draw, drawing_area)
-
-        # Wayland window handle.
-        wl_handle = glsink.get_wayland_window_handle(drawing_area)
-        glsink.set_window_handle(wl_handle)
-
-        # Wayland display context wrapped as a GStreamer context.
-        wl_display = glsink.get_default_wayland_display_context()
-        glsink.set_context(wl_display)
-
+        set_display_contexts(glsink, drawing_area)
+        drawing_area.connect('draw', on_widget_draw)
         drawing_area.connect('configure-event', on_widget_configure, glsink)
         window.connect('delete-event', Gtk.main_quit)
         window.show_all()
-
-        # The appsink pipeline branch must use the same GL display as the screen
-        # rendering so they get the same GL context. This isn't automatically handled
-        # by GStreamer as we're the ones setting an external display handle.
-        def on_bus_message_sync(bus, message, glsink):
-            if message.type == Gst.MessageType.NEED_CONTEXT:
-                _, context_type = message.parse_context_type()
-                if context_type == GstGL.GL_DISPLAY_CONTEXT_TYPE:
-                    sinkelement = glsink.get_by_interface(GstVideo.VideoOverlay)
-                    gl_context = sinkelement.get_property('context')
-                    if gl_context:
-                        display_context = Gst.Context.new(GstGL.GL_DISPLAY_CONTEXT_TYPE, True)
-                        GstGL.context_set_gl_display(display_context, gl_context.get_display())
-                        message.src.set_context(display_context)
-            return Gst.BusSyncReply.PASS
-
-        bus.set_sync_handler(on_bus_message_sync, glsink)
 
     with Worker(save_frame) as images, Commands() as get_command:
         signals = {'appsink':
@@ -364,8 +315,7 @@ def run_pipeline(pipeline, layout, loop, render_overlay, display, handle_sigint=
                 render_overlay=functools.partial(render_overlay, layout=layout),
                 layout=layout,
                 images=images,
-                get_command=get_command),
-             'eos' : on_sink_eos},
+                get_command=get_command)},
             **(signals or {})
         }
 
@@ -374,6 +324,11 @@ def run_pipeline(pipeline, layout, loop, render_overlay, display, handle_sigint=
             if component:
                 for signal_name, signal_handler in signals.items():
                     component.connect(signal_name, signal_handler, pipeline)
+
+        # Set up a pipeline bus watch to catch errors.
+        bus = pipeline.get_bus()
+        bus.add_signal_watch()
+        bus.connect('message', on_bus_message, pipeline, loop)
 
         # Handle signals.
         if handle_sigint:
