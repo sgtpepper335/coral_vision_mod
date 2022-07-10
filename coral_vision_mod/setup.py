@@ -2,12 +2,12 @@ from setuptools import setup, find_packages
 
 setup(
     name='edgetpuvision',
-    version='1.0',
+    version='7.0',
     description='EdgeTPU camera API',
     long_description='API to run inference on image data coming from the camera.',
-    author='AIY Projects',
-    author_email='support-aiyprojects@google.com',
-    url="https://aiyprojects.withgoogle.com/",
+    author='Coral',
+    author_email='coral-support@google.com',
+    url="https://coral.ai/",
     license='Apache 2',
     packages=find_packages(),
     include_package_data=True,
@@ -16,7 +16,7 @@ setup(
         'Pillow>=4.0.0',
         'pygobject>=3.22.0',
         'protobuf>=3.0.0',
-        'edgetpu',
+        'pycoral>=1.0.0',
     ],
     entry_points = {
         'console_scripts': ['edgetpu_classify=edgetpuvision.classify:main',
